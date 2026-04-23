@@ -20,6 +20,7 @@ from data import RecommendationDataset
 from evaluation import FullRankingEvaluator, SampledEvaluator
 from models import LightGCN
 from training import BPRLoss, CheckpointManager, PairwiseSampler, ResultsLogger, print_training_header, train_epoch
+from explainer import save_adj_with_meta, sparse_torch_adj_to_scipy_csr
 
 
 def set_seed(seed: int) -> None:
@@ -78,6 +79,19 @@ def train_lightgcn(
         reg_weight=config["reg_weight"],
     ).to(device)
     model.set_adjacency_matrix(dataset.interaction_pairs, device)
+
+    if config.get("adj_output"):
+        adj_scipy = sparse_torch_adj_to_scipy_csr(model.adj)
+        save_adj_with_meta(
+            adj_scipy,
+            n_users=dataset.n_users,
+            n_items=dataset.n_items,
+            n_layers=config["n_layers"],
+            path=config["adj_output"],
+            user_mapping=dataset.user_mapping,
+            item_mapping=dataset.item_mapping,
+        )
+        print(f"[SAVED] Adjacency + metadata: {config['adj_output']}")
 
     optimizer = optim.Adam(model.parameters(), lr=config["learning_rate"])
     loss_fn = BPRLoss()
@@ -231,6 +245,8 @@ def main() -> None:
     parser.add_argument("--max_rows", type=int, default=None)
     parser.add_argument("--max_samples_per_epoch", type=int, default=0)
     parser.add_argument("--max_epoch_seconds", type=float, default=0.0)
+    parser.add_argument("--adj_output", type=str, default=None,
+                        help="Save adjacency matrix + metadata to this .npz path (for explain.py)")
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -256,6 +272,7 @@ def main() -> None:
         "seed": args.seed,
         "max_samples_per_epoch": args.max_samples_per_epoch,
         "max_epoch_seconds": args.max_epoch_seconds,
+        "adj_output": args.adj_output,
     }
 
     dataset = load_dataset(args)
