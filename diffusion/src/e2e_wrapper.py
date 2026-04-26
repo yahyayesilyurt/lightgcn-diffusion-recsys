@@ -108,20 +108,25 @@ class E2EWrapper(nn.Module):
         target_seq_ids,
         target_mask,
         source_seq_ids=None,
-        source_mask=None
+        source_mask=None,
+        return_fusion_weights=False,
     ):
         """
         Args:
-            user_ids       : (B,)   — 0-indexed user IDs
-            target_seq_ids : (B, S) — 1-indexed target history, 0=padding
-            target_mask    : (B, S) — True where padding
-            source_seq_ids : (B, S) — 1-indexed source history, 0=padding
-                                      (Not used if use_source_stream=False)
-            source_mask    : (B, S) — True where padding
-                                      (Not used if use_source_stream=False)
+            user_ids             : (B,)   — 0-indexed user IDs
+            target_seq_ids       : (B, S) — 1-indexed target history, 0=padding
+            target_mask          : (B, S) — True where padding
+            source_seq_ids       : (B, S) — 1-indexed source history, 0=padding
+                                            (Not used if use_source_stream=False)
+            source_mask          : (B, S) — True where padding
+                                            (Not used if use_source_stream=False)
+            return_fusion_weights: If True, return cross-attention weights
+                (source vs target slots) before final L2 normalize.
 
         Returns:
             c_ud : (B, D) — L2-normalized diffusion condition vector
+            Or (c_ud, fusion_weights) when return_fusion_weights=True;
+            fusion_weights (B, 2): [:,0] source, [:,1] target (sums to 1).
         """
 
         # ── Stream 1: GNN Anchor ─────────────────────────────────────────
@@ -163,10 +168,20 @@ class E2EWrapper(nn.Module):
             h_u_source = h_u_cross                                        # (B, D)
 
         # ── Triple-Stream Fusion ─────────────────────────────────────────
+        if return_fusion_weights:
+            c_ud_raw, fusion_weights = self.condition_generator(
+                h_u_cross=h_u_cross,
+                h_u_source=h_u_source,
+                h_u_target=h_u_target,
+                return_attention=True,
+            )                                                             # (B, D), (B, 2)
+            c_ud = F.normalize(c_ud_raw, p=2, dim=1)
+            return c_ud, fusion_weights
+
         c_ud = self.condition_generator(
             h_u_cross=h_u_cross,
             h_u_source=h_u_source,
-            h_u_target=h_u_target
+            h_u_target=h_u_target,
         )                                                                 # (B, D)
 
         return F.normalize(c_ud, p=2, dim=1)

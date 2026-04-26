@@ -44,15 +44,19 @@ class AttentionConditionGenerator(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, h_u_cross, h_u_source, h_u_target):
+    def forward(self, h_u_cross, h_u_source, h_u_target, return_attention=False):
         """
         Args:
-            h_u_cross  : (B, D)
-            h_u_source : (B, D)
-            h_u_target : (B, D)
+            h_u_cross        : (B, D)
+            h_u_source       : (B, D)
+            h_u_target       : (B, D)
+            return_attention  : If True, also return cross-attention weights over
+                [source, target] keys (for explainability).
 
         Returns:
             c_ud : (B, D)
+            Or when return_attention is True: (c_ud, attn_weights) where
+            attn_weights is (B, 2) with [:, 0] = source, [:, 1] = target.
         """
         # 1. KV: Source + Target intent side by side -> (B, 2, D)
         kv = torch.stack([h_u_source, h_u_target], dim=1)
@@ -61,15 +65,27 @@ class AttentionConditionGenerator(nn.Module):
         query = h_u_cross.unsqueeze(1)
 
         # 3. Pre-Norm Cross-Attention + Residual
-        # TODO: The attention weights can be retrieved from here by rotating them. This is beneficial for explainability.
-        attn_out, _ = self.cross_attention(
-            query=self.norm1(query),
-            key=self.norm1(kv),
-            value=self.norm1(kv)
-        )
+        qn = self.norm1(query)
+        kn = self.norm1(kv)
+        if return_attention:
+            attn_out, attn_w = self.cross_attention(
+                query=qn, key=kn, value=kn,
+                need_weights=True,
+                average_attn_weights=True,
+            )
+        else:
+            attn_out, _ = self.cross_attention(
+                query=qn, key=kn, value=kn,
+                need_weights=False,
+            )
         x = query + self.dropout(attn_out)              # (B, 1, D)
 
         # 4. Pre-Norm FFN + Residual
         x = x + self.dropout(self.ffn(self.norm2(x)))  # (B, 1, D)
 
-        return x.squeeze(1)                            # (B, D)
+        c_ud = x.squeeze(1)                            # (B, D)
+        if not return_attention:
+            return c_ud
+        # attn_w: (B, 1, 2) — attention from single query pos over [source, target]
+        fusion_weights = attn_w.squeeze(1).contiguous()
+        return c_ud, fusion_weights
